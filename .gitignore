@@ -34,3 +34,10 @@ html/
 *png
 *zip
 *json
+*.whl
+*.tar.gz
+*.egg
+*.egg-info
+*.tar
+*.tar.bz2
+*.tar.xz

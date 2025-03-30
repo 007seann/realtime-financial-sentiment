@@ -1,36 +1,28 @@
-
-from plugins.packages.PDCM.pipeline import _cleanup_multiprocessing_resources, run_process_for_cik
-from plugins.packages.PDCM.metadata import FileMetadata
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit
-from sqlalchemy.ext.declarative import declarative_base
+from plugins.packages.PDCM.pipeline import run_process_for_cik
+from plugins.packages.PDCM.metadata import FileMetadata, Base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
+from pyspark.sql.functions import col, lit
 
-import pyspark.sql.functions as F
 
-import sys
 import os
 import tqdm
 import hashlib
 import datetime
 import logging
-import atexit
 import multiprocessing
 import pandas as pd
 import pyarrow.parquet as pq
 import pyarrow as pa
-import pyarrow.compute as pc
 import re
 import json
-import time
-import asyncio
+import sys
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 # Add the parent directory to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-# Register the cleanup function to run at interpreter shutdown
-atexit.register(_cleanup_multiprocessing_resources)
+# print('os.path.dirname(__file__)', os.path.dirname(__file__))
+# print("Resolved path being added to sys.path in constructDTM:", os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # ------------------ SQLAlchemy Setup ------------------ #
 
@@ -53,18 +45,26 @@ class ConstructDTM:
         firms_dict = {cik: symbol for symbol, cik in firms_dict.items()}
         self.firms_dict = firms_dict
         # Add hons_project.zip to SparkContext
-        self.spark.sparkContext.addPyFile("hons_project.zip")
+        self.spark.sparkContext.addPyFile("/opt/airflow/plugins/packages/hons_project.zip")
+        self.spark.sparkContext.addPyFile("/opt/airflow/plugins/packages/PDCM/pipeline.py")
+        self.spark.sparkContext.addPyFile("/opt/airflow/plugins/packages/PDCM/metadata.py")
+        self.spark.sparkContext.addPyFile("/opt/airflow/plugins/packages/PDCM/vol_reader_fun.py")
 
         
         # --------------- Configure Database --------------- #
         # Adjust connection string for your environment
-        db_url = "postgresql://airflow:airflow@postgres_container:5432/airflowMetadata"
-        self.engine = create_engine(db_url, echo=False)
+        db_url = "postgresql://pdcm:pdcm@pdcmmetastore_container:5432/pdcm"
+        self.engine = create_engine(db_url, echo=True)
         self.SessionLocal = sessionmaker(bind=self.engine)
-        Base = declarative_base()
-        # self.SessionLocal = SessionLocal
+
+
         # Create table if not exists
-        Base.metadata.create_all(self.engine)
+        # Debug: Check if table creation is successful
+        try:
+            Base.metadata.create_all(self.engine)
+            print("[Debug] Tables created successfully.")
+        except Exception as e:
+            print(f"[Error] Failed to create tables: {e}")
         
 
         
@@ -393,6 +393,7 @@ class ConstructDTM:
         2. Collects metadata and Parquet file paths returned by workers.
         3. Optionally merges Parquet files for centralized output.
         """
+
         # Enable case sensitivity in Spark
         self.spark.conf.set("spark.sql.caseSensitive", "true")
         
@@ -401,22 +402,38 @@ class ConstructDTM:
         os.makedirs(folder_path, exist_ok=True)
 
         firms_ciks = list(self.firms_dict.keys())
-        
         # Batch process adding and updating metadata in the database
 
         # 1) Distribute tasks to workers
-        rdd = self.spark.sparkContext.parallelize(firms_ciks)
-        db_url = "postgresql://apple:qwer@localhost:5432/seanchoimetadata"
+        # rdd = self.spark.sparkContext.parallelize(firms_ciks)
+
+        db_url = "postgresql://pdcm:pdcm@pdcmmetastore_container:5432/pdcm"
         
-        results = rdd.map(lambda cik: run_process_for_cik(
-            cik,
-            save_folder,
-            folder_path,
-            start_date,
-            end_date,
-            db_url,
-            firms_csv_file_path
-        )).collect()
+        results = []
+        for cik in firms_ciks:
+            result = run_process_for_cik(
+                cik,
+                save_folder,
+                folder_path,
+                start_date,
+                end_date,
+                db_url,
+                firms_csv_file_path
+            )
+            results.append(result)
+        print('results', results)
+
+
+        # results = rdd.map(lambda cik: run_process_for_cik(
+        #     cik,
+        #     save_folder,
+        #     folder_path,
+        #     start_date,
+        #     end_date,
+        #     db_url,
+        #     firms_csv_file_path
+        # )).collect()
+        # print('results', results)
 
         # Driver side: gather output file paths
         updated_files_paths = []
@@ -441,7 +458,7 @@ class ConstructDTM:
         return pa.Table.from_arrays(new_columns, schema=schema)
     
 
-    def multi_stage_parquet_merge(self, save_path, batch_size=50):
+    def multi_stage_parquet_merge(self, save_path, start_date, end_date, batch_size=50):
         from vol_reader_fun import vol_reader2
         """
         Multi-stage merge of Parquet files to avoid loading everything into memory at once.
@@ -500,7 +517,7 @@ class ConstructDTM:
             # If we have any data for this batch, Write an intermediate Parquet file while preprocessing
             # Generate 3-day rolling returns and volatilities for the batch of CIKs
             if tables_in_this_batch:
-                batch_table = pa.concat_tables(tables_in_this_batch, promote_options='default')
+                batch_table = pa.concat_tables(tables_in_this_batch)
                 batch_df = batch_table.to_pandas()
                 columns_to_drop = ['form', 'table', 'content', 'heading']
                 batch_df = batch_df.drop(columns=columns_to_drop, errors='ignore')
@@ -587,7 +604,7 @@ class ConstructDTM:
         df.to_parquet(df_path, index=False)
 
     
-    def concatenate_parquet_files(self, save_path, total_constituents_path, constituents_metadata_path):
+    def concatenate_parquet_files(self, save_path, total_constituents_path, constituents_metadata_path, start_date, end_date):
         """
         Concatenate all intermediate Parquet files into a single Parquet file.
         """
@@ -597,7 +614,7 @@ class ConstructDTM:
         # existing_files = [f for f in existing_files if f != '.DS_Store']
         # intermediate_file_paths = [os.path.join(existing_files_path, f) for f in existing_files]
         
-        intermediate_file_paths = self.multi_stage_parquet_merge(save_path)
+        intermediate_file_paths = self.multi_stage_parquet_merge(save_path, start_date, end_date)
         filtered_paths = []
         for file_path in intermediate_file_paths:
             file_path = self.filter_sp500(save_path, file_path, total_constituents_path, constituents_metadata_path)
@@ -697,57 +714,3 @@ class ConstructDTM:
         print(f"Filtered data saved to {save_folder}")
         return save_folder
         
-# Example Usage
-if __name__ == "__main__":
-    # Initialize Spark session
-    spark = (SparkSession.builder
-        .appName("DataPipeline")
-        .master("local[*]")
-        # Memory allocations
-        .config("spark.driver.memory", "8g")
-        .config("spark.executor.memory", "8g")
-        .config("spark.sql.shuffle.partitions", "8") 
-        .getOrCreate()
-    )
-
-    # Define input parameters
-    # # Test
-    # data_folder = "/Users/apple/PROJECT/Code_4_analysis_reports/test4"
-    # save_folder = "/Users/apple/PROJECT/hons_project/data/SP500/test4"
-    # firms_csv_file_path = "/Users/apple/PROJECT/Code_4_SECfilings/test.csv"
-
-    # Load 2
-    data_folder = "/Users/apple/PROJECT/Code_4_analysis_reports/analysis_reports_summary"
-    save_folder = "/Users/apple/PROJECT/hons_project/data/SP500/analysis_reports_summary"
-    firms_csv_file_path = '/Users/apple/PROJECT/Code_4_SECfilings/sp500_total_constituents_final.csv'
-    
-    
-    columns = ["Name", "CIK", "Date", "Body"]
-    start_date = '2000-01-01'
-    end_date = '2026-01-01'
-
-    # Create pipeline and execute tasks
-    pipeline = ConstructDTM(spark, data_folder, save_folder, firms_csv_file_path, columns, start_date, end_date)
-
-    start_time_1 = time.time()
-    pipeline.file_aggregator()
-    end_time_1 = time.time()
-    
-    
-    start_time_2 = time.time()
-    pipeline.process_filings_for_cik_spark(save_folder, start_date, end_date, firms_csv_file_path)
-    end_time_2 = time.time()
-    
-    
-    start_time_3 = time.time()
-    constituents_metadata_path = "../Code_4_SECfilings/sp500_constituents.csv" # This is for getting the CIKs for the SP500, but only for the year 2006 - 2023
-    pipeline.concatenate_parquet_files(save_folder, firms_csv_file_path, constituents_metadata_path)
-    end_time_3 = time.time()
-    
-    print(f"Time taken to run file_aggregator: {end_time_1 - start_time_1} seconds")
-    print(f"Time taken to run process_filings_for_cik_spark: {end_time_2 - start_time_2} seconds")
-    print(f"Time taken to run concatnation: {end_time_3 - start_time_3} seconds")
-
-    # pipeline.aggregate_data(files_path=save_folder, firms_ciks=firms_ciks)
-
-

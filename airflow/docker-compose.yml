@@ -1,21 +1,19 @@
 
-services:
+services: 
+
     postgres:
-        image: postgres:13
-        container_name: postgres_container
-        environment:
-          POSTGRES_USER: airflow
-          POSTGRES_PASSWORD: airflow
-          POSTGRES_DB: airflowMetadata
-        volumes:
-          - postgres-db-volume:/var/lib/postgresql/data
-          - ./init_db_postgres.sh:/docker-entrypoint-initdb.d/init_db.sh:ro
-        healthcheck:
-          test: ["CMD", "pg_isready", "-U", "airflow"]
-          interval: 5s
-          retries: 5
-        restart: always
-        
+      image: postgres:13
+      container_name: postgres_container
+      restart: always
+      environment:
+        POSTGRES_USER: airflow
+        POSTGRES_PASSWORD: airflow
+        POSTGRES_DB: airflow
+      ports:
+        - "5432:5432"
+      volumes:
+        - postgres-db-volume:/var/lib/postgresql/data
+
     redis:
         image: redis:latest
         expose:
@@ -29,13 +27,17 @@ services:
 
     airflow:       
         # # privileged: true
-        # user: "root"                           
+        # user: "root"      
+        # image: apache/airflow:2.8.1-python3.8
+        image: real-time-airflow-image                    
         build: './airflow_docker'                       
         container_name: airflow_container
+        entrypoint: /opt/airflow/entrypoint.sh  
         restart: always
         depends_on:
-            - postgres
+          - postgres
         environment:
+            AIRFLOW_HOME: /opt/airflow
             AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres_container:5432/airflow
             AIRFLOW__CORE__EXECUTOR: LocalExecutor
             AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'True'
@@ -48,20 +50,19 @@ services:
             dags_folder: /opt/airflow/dags
             WEB_SERVER_PORT: 3000
             NLTK_DATA: /opt/airflow/nltk_data
-            PYTHONPATH: /home/airflow/.local/lib/python3.7/site-packages:$PYTHONPATH:/opt/airflow/plugins
-            PATH: /home/airflow/.local/bin:/usr/lib/jvm/java-11-openjdk-amd64/bin:/opt/spark-3.2.1-bin-hadoop3.2/bin:/opt/spark-3.2.1-bin-hadoop3.2/sbin:/opt/hadoop-3.3.1/bin:/opt/hive-3.1.3-bin/bin:$PATH
+            PYTHONPATH: /home/airflow/.local/lib/python3.8/site-packages:$PYTHONPATH:/opt/airflow/plugins
             YFINANCE_CACHE_DIR: /opt/airflow/.cache/py-yfinance
-            SPARK_HOME: /opt/spark-3.2.1-bin-hadoop3.2
-            JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+
             PYSPARK_SUBMIT_ARGS: "--packages org.postgresql:postgresql:42.2.20"
+            PYSPARK_PYTHON: /usr/local/bin/python
         volumes:                                        
             - ./dags:/opt/airflow/dags:rw
             - ./data:/opt/airflow/data:rw
             - ./plugins:/opt/airflow/plugins:rw
             - ./nltk_data:/opt/airflow/nltk_data
-            - ./spark_logs:/opt/spark-3.2.1-bin-hadoop3.2/logs:rw
             - ./airflow_docker/airflow_env.sh:/opt/airflow/airflow_env.sh:ro
-
+            - ./airflow_docker/entrypoint.sh:/opt/airflow/entrypoint.sh:ro
+            - ./spark-logs:/opt/spark-logs:rw
 
         ports:
             - "8080:8080"   # Airflow Webserver
@@ -74,7 +75,25 @@ services:
           interval: 10s
           timeout: 10s
           retries: 5
+    pdcmmetastore:
+        image: postgres:14
+        container_name: pdcmmetastore_container
+        environment:
+          POSTGRES_USER: pdcm
+          POSTGRES_PASSWORD: pdcm
+          POSTGRES_DB: pdcm
+        volumes:
+          - pdcmmetastore-db-volume:/var/lib/postgresql/data
+        healthcheck:
+          test: ["CMD", "pg_isready", "-U", "pdcm"]
+          interval: 5s
+          retries: 5
+        restart: always
+        ports:
+          - "5433:5432"  # PDCMmetastore Postgres port
+      
 
 
 volumes:
+  pdcmmetastore-db-volume:
   postgres-db-volume:

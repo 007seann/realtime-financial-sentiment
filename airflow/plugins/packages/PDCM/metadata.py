@@ -5,15 +5,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, String, DateTime, Boolean
 
-# Configure the connection pool
-def get_engine():
-    db_url = "postgresql://apple:qwer@localhost:5432/seanchoimetadata"
-    engine = create_engine(db_url, pool_size=10, max_overflow=5, echo=False)
-    return engine
+# # Configure the connection pool
+# def get_engine():
+#     db_url = "postgresql://pdcm:pdcm@pdcmmetastore_container:5432/pdcm"
+#     engine = create_engine(db_url, pool_size=10, max_overflow=5, echo=False)
+#     return engine
 
-# Create a session maker using the pooled engine
-engine = get_engine()
-SessionLocal = sessionmaker(bind=engine)
+# # Create a session maker using the pooled engine
+# engine = get_engine()
+# SessionLocal = sessionmaker(bind=engine)
 # ------------------ SQLAlchemy Setup ------------------ #
 Base = declarative_base()
 

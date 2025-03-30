@@ -11,7 +11,7 @@ import pandas as pd
 import datetime as dt
 
 import yfinance as yf
-
+import time
 # QQQfirms_csv_file_path = "/Users/apple/PROJECT/Code_4_10k/QQQ_constituents.csv"
 # firms_df = pd.read_csv(QQQfirms_csv_file_path)
 # firms_df = firms_df.drop(['Security', 'GICS Sector', 'GICS Sub-Industry', 'Headquarters Location', 'Date added', 'Founded'], axis=1)
@@ -60,6 +60,35 @@ def vol_reader(comp, rev_firms_dict ,start_date, end_date):
     df_vol = df_vol.dropna()
     df_vol.set_index('Date', inplace=True)
     return df_vol
+
+# def vol_reader(comp, rev_firms_dict, start_date, end_date):
+#     stock = rev_firms_dict[comp]
+#     print(f'Downloading {stock} stock data...')
+#     start_time = time.time()
+#     df = yf.download(stock, start=start_date, end=end_date, progress=False, auto_adjust=False)[['Open', 'Close', 'High', 'Low']]
+#     end_time = time.time()
+#     print(f'Downloaded {stock} data in {end_time - start_time:.2f} seconds')
+#     # Compute daily-range volatility proxy: (log(High) - log(Low))^2 / (4 * log(2))
+#     log_range = np.log(df['High'].values) - np.log(df['Low'].values)
+#     daily_range_vol = (log_range ** 2) / (4 * np.log(2))
+
+#     # Compute log return: log(Close / Open)
+#     log_ret = np.log(df['Close'].values / df['Open'].values)
+
+#     # Build final DataFrame using numpy for speed
+#     data = {
+#         '_vol': daily_range_vol,
+#         '_ret': log_ret,
+#         '_vol+1': np.roll(daily_range_vol, -1),
+#         '_ret+1': np.roll(log_ret, -1)
+#     }
+
+#     df_vol = pd.DataFrame(data, index=df.index)
+#     df_vol = df_vol[:-1]  # Drop last row (shifted +1 has garbage)
+
+#     print('df_vol shape:', df_vol.shape)
+#     print('df_vol', df_vol.head())
+#     return df_vol
 
 def vol_reader2(comps, rev_firms_dict, start_date, end_date, window = None, extra_end = False, extra_start = False, AR = None):
     def ret_fun(xt_1, xt): # log difference

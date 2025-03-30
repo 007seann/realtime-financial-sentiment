@@ -1,101 +1,92 @@
 
-# Use an official Python runtime as a base image
-FROM python:3.9-slim AS base
-# Upgrade pip3 (optional, but recommended)
-RUN python -m pip install --upgrade pip
 
-# Set environment variable for Airflow home directory
+# Use the official Airflow 2.8.1 image with Python 3.8 as the base
+FROM apache/airflow:2.8.1-python3.8
+
+# # Set Airflow home directory
 ENV AIRFLOW_HOME=/opt/airflow
+# ENV AIRFLOW__CORE__EXECUTOR=SequentialExecutor
 
-# Install system dependencies and pip3
-RUN apt-get update && apt-get install -y \
-    python3-pip \
-    build-essential \
-    libpq-dev \
-    curl \
-    && apt-get clean
-
-
-
-# Install Airflow
-FROM apache/airflow:2.5.1-python3.9
-RUN pip3 install apache-airflow==2.5.1
-
-
-
-# Install Java
+# Switch to root for system-level installations
 USER root
 
-RUN apt-get update && \
-    apt-get install -y openjdk-11-jre wget supervisor && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y \
+        wget \
+        curl \
+        supervisor \
+        postgresql-client \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* 
 
-ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
-ENV PATH=$JAVA_HOME/bin:$PATH
 
+# Install Java 21 (Temurin from Adoptium)
+RUN wget https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz \
+&& mkdir -p /opt/java/openjdk-21 \
+&& tar -xzf OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz -C /opt/java/openjdk-21 --strip-components=1 \
+&& rm OpenJDK21U-jdk_x64_linux_hotspot_21.0.2_13.tar.gz
 
-# Install Spark
-ENV SPARK_VERSION=3.2.1
-ENV SPARK_HADOOP_VERSION=3.2
-RUN wget -q https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${SPARK_HADOOP_VERSION}.tgz && \
-    tar -xzf spark-${SPARK_VERSION}-bin-hadoop${SPARK_HADOOP_VERSION}.tgz -C /opt/ && \
-    rm spark-${SPARK_VERSION}-bin-hadoop${SPARK_HADOOP_VERSION}.tgz
+# Set JAVA_HOME and update PATH
+ENV JAVA_HOME=/opt/java/openjdk-21
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# Install Spark 3.2.1
+ENV SPARK_VERSION=3.5.4
+ENV SPARK_HADOOP_VERSION=3
+RUN wget -q https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${SPARK_HADOOP_VERSION}.tgz \
+    && tar -xzf spark-${SPARK_VERSION}-bin-hadoop${SPARK_HADOOP_VERSION}.tgz -C /opt/ \
+    && rm spark-${SPARK_VERSION}-bin-hadoop${SPARK_HADOOP_VERSION}.tgz
 
 # Set Spark environment variables
 ENV SPARK_HOME=/opt/spark-${SPARK_VERSION}-bin-hadoop${SPARK_HADOOP_VERSION}
 ENV PATH=$PATH:${SPARK_HOME}/bin:${SPARK_HOME}/sbin
 
 # Copy custom JAR files for Spark
-COPY kafka-clients-3.4.0.jar $SPARK_HOME/jars/kafka-clients-3.4.0.jar
-COPY postgresql-42.5.4.jar $SPARK_HOME/jars/postgresql-42.5.4.jar
+# COPY kafka-clients-2.8.0.jar $SPARK_HOME/jars/
+# COPY postgresql-42.2.20.jar $SPARK_HOME/jars/
 
-
-# Install Python requirements
-WORKDIR /opt/airflow/
-COPY requirements.txt .
+RUN chown -R airflow:root $SPARK_HOME
+# Switch to airflow user for Python installations
 USER airflow
-RUN pip3 install --user -r requirements.txt
 
+# Ensure .local/bin is in PATH for user-installed packages
+ENV PATH="/home/airflow/.local/bin:$PATH"
 
-# Copy initialization scripts
+# Install Python dependencies
+WORKDIR /opt/airflow
+COPY requirements.txt .
+
+COPY deps /deps/
+
+RUN pip install --user psycopg2-binary
+RUN pip install --user --no-index --find-links=/deps httpx==0.25.2
+RUN pip install --user --no-index --find-links=/deps psycopg2-binary pyspark==3.2.1 \
+&& if [ -f requirements.txt ]; then pip install --user --no-index --find-links=/deps -r requirements.txt; fi \
+&& rm -rf /home/airflow/.local/lib/python3.8/site-packages/airflow/example_dags \
+&& rm -rf /home/airflow/.cache/pip
+
+# RUN pip install --user psycopg2-binary pyspark==3.2.1 \
+#     && if [ -f requirements.txt ]; then pip install --user -r requirements.txt; fi \
+#     && rm -rf /home/airflow/.local/lib/python3.8/site-packages/airflow/example_dags \
+#     && rm -rf /home/airflow/.cache/pip
+
+# Switch back to root to copy config files and set permissions
 USER root
-COPY init_db.sh /opt/airflow/init_db.sh
-RUN chmod +x /opt/airflow/init_db.sh
 
-# Copy supervisor configuration file
+# Copy supervisor and entrypoint configuration
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-# Expose ports
-EXPOSE 22
-EXPOSE 3000
-EXPOSE 4040
-EXPOSE 8000
+COPY entrypoint.sh /opt/airflow/entrypoint.sh
+RUN chmod +x /opt/airflow/entrypoint.sh
 
 # Set permissions for Airflow directories
 RUN mkdir -p /opt/airflow/logs && chown -R airflow:$(id -gn airflow) /opt/airflow/logs
 
-# Switch to airflow user
+# Expose ports (optional, controlled by docker-compose.yml)
+EXPOSE 22 3000 4040 8000
+
+# Switch to airflow user for runtime
 USER airflow
 
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["bin/spark-class", "org.apache.spark.deploy.master.Master"]
 
 
-
-# Install NLTK data 
-# # Set the working directory
-# WORKDIR /opt/airflow
-# # Create a directory for NLTK data
-# RUN mkdir -p /opt/airflow/nltk_data
-
-# # Download specific NLTK data during the build
-# RUN python -m nltk.downloader -d /opt/airflow/nltk_data punkt
-# RUN python -m nltk.downloader -d /opt/airflow/nltk_data stopwords
-# RUN python -m nltk.downloader -d /opt/airflow/nltk_data words
-# RUN python -m nltk.downloader -d /opt/airflow/nltk_data wordnet
-# RUN python -m nltk.downloader -d /opt/airflow/nltk_data omw-1.4
-# RUN python -m nltk.downloader -d /opt/airflow/nltk_data averaged_perceptron_tagger
 

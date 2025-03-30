@@ -1,52 +1,50 @@
 
-from bs4 import BeautifulSoup
-import re
-from collections import Counter
-
 import pendulum
 from airflow import DAG
 from airflow.decorators import task
-from airflow.operators.python import PythonOperator
-from airflow.operators.bash import BashOperator
+from plugins.common.time_log_decorator import time_log
 
+import time
 import os
 import pandas as pd
 import datetime
-import subprocess
+
+
 
 with DAG(
-    dag_id="firm_10k_dict_builder",
-    schedule="0 0 1 6,12 *",
-    start_date=pendulum.datetime(2023, 1, 1, tz="UTC"),
+    dag_id="sec_sentiment",
+    schedule="0 0 1 1,4,7,10 *",
+    start_date=pendulum.datetime(2025, 1, 1, tz="UTC"),
     catchup=False,
 
 ) as dag:
     
     ############################### Configurations ################################
     level = 'firm'
-    type = '10-K'
-    start_date = '2023-01-01'
-    end_date = datetime.datetime.now()
+    type = ['10-K', '10-Q']
+    start_date = '2025-01-01'
+    end_date = datetime.datetime.now().strftime('%Y-%m-%d')
     
     # Save File Paths
-    final_save_path = f'/opt/airflow/data/NASDAQ100/{level}_{type}_data'
-    csv_file_path = '/opt/airflow/data/nvidia_constituents.csv'
+    base_path = os.getenv("AIRFLOW_HOME", "/opt/airflow")
+    final_save_path = os.path.join(base_path, "data/SP500/sec")
+    csv_file_path = os.path.join(base_path, "data/constituents/firms/nvidia_constituents_final.csv")
     columns = ["Name", "CIK", "Date", "Body" ]
     firms_df = pd.read_csv(csv_file_path)
-    firms_df = firms_df.drop(['Security', 'GICS Sector', 'GICS Sub-Industry', 'Headquarters Location', 'Date added', 'Founded'], axis=1)
+    columns_to_drop = ['Security', 'GICS Sector', 'GICS Sub-Industry', 'Headquarters Location', 'Date added', 'Founded']
+    firms_df = firms_df.drop(columns=columns_to_drop, errors='ignore')
     firms_df['CIK'] = firms_df['CIK'].apply(lambda x: str(x).zfill(10))
-    firms_dict = firms_df.set_index('Symbol')['CIK'].to_dict()
-
+    
     seen = set()
     firms_ciks = [cik for cik in firms_df['CIK'].tolist() if not (cik in seen or seen.add(cik))] 
     
     # if level == 'firm':        
-    data_raw_folder = f'/opt/airflow/data/NASDAQ100/{firms_ciks[0]}_{type}_html'
-    sec10k_10k_extracted_folder = f'/opt/airflow/data/NASDAQ100/{firms_ciks[0]}_{type}_all_txt'
-    sec10k_item1a_extracted_folder = f'/opt/airflow/data/NASDAQ100/{firms_ciks[0]}_{type}_riskFactor_txt' 
-    
-    error_html_csv_path = 'opt/airflow/data/error_html_log.csv'
-    error_txt_csv_path = 'opt/airflow/data/error_txt_log.csv'   
+    data_raw_folder = os.path.join(base_path, "data/SP500/sec/html")
+    extracted_folder = os.path.join(base_path, "data/SP500/sec/txt")
+
+    error_html_csv_path = os.path.join(base_path, "data/error_html_log.csv")
+    error_txt_csv_path = os.path.join(base_path, "data/error_txt_log.csv")
+
     if os.path.exists(error_html_csv_path):
         os.remove(error_html_csv_path)
     if os.path.exists(error_txt_csv_path):
@@ -58,39 +56,42 @@ with DAG(
     def test(PATH):
     
         df = pd.read_csv(PATH, encoding = 'utf-8')
-        QQQ_cik = df['CIK'].drop_duplicates().tolist() 
+        cik = df['CIK'].drop_duplicates().tolist() 
         
-        return QQQ_cik
+        return cik
     
     @task(task_id='t2_download_executor')
-    def download_executor(firm_list_path, type, start_date, end_date):
-        from common.sec_crawler import test, download_fillings
+    @time_log
+    def download_executor(firm_list_path, type, start_date, end_date, **kwargs):
+        from plugins.packages.FTRM.sec_crawler import download_fillings
         import os
         import pandas as pd
         
         try:
             df = pd.read_csv(firm_list_path, encoding = 'utf-8')
-            QQQ_cik = df['CIK'].drop_duplicates().tolist()
-            QQQ_ticker = df['Symbol'].tolist()
-            QQQ_cik_ticker = dict(zip(QQQ_cik, QQQ_ticker))
+            cik = df['CIK'].drop_duplicates().tolist()
+            ticker = df['Symbol'].tolist()
+            cik_ticker = dict(zip(cik, ticker))
         except UnicodeDecodeError:
             df = pd.read_csv(firm_list_path, encoding = 'ISO-8859-1')
-            QQQ_cik = df['CIK'].drop_duplicates().tolist()
-            QQQ_ticker = df['Symbol'].tolist()
-            QQQ_cik_ticker = dict(zip(QQQ_cik, QQQ_ticker))
+            cik = df['CIK'].drop_duplicates().tolist()
+            ticker = df['Symbol'].tolist()
+            cik_ticker = dict(zip(cik, ticker))
             
         # root_folder = '10k-html'
-        doc_type = type
-        headers = {'User-Agent': 'University of Edinburgh s2101367@ed.ac.uk'}
+        for t in type:
+            doc_type = t
+            headers = {'User-Agent': 'University of Edinburgh s2101367@ed.ac.uk'}
 
-        if not os.path.exists(data_raw_folder):
-            os.makedirs(data_raw_folder)
-        download_fillings(QQQ_cik_ticker, data_raw_folder,doc_type,headers, end_date, start_date)
+            if not os.path.exists(data_raw_folder):
+                os.makedirs(data_raw_folder)
+            download_fillings(cik_ticker, data_raw_folder, doc_type,headers, start_date, end_date)
+        
     
-    
-    @task(task_id='t3_extraction_executor')
-    def sec10k_extraction_executor(data_folder, save_folder):
-        from common.sec10k_extractor import process_fillings_for_cik
+    @task(task_id='t3_txt_convertor')
+    @time_log
+    def txt_convertor(data_folder, save_folder, **kwargs):
+        from plugins.packages.FTRM.sec_txt_extractor import process_fillings_for_cik
         import concurrent.futures
         import os
         
@@ -108,62 +109,66 @@ with DAG(
             # All tasks are completed, shutdown the executor
             executor.shutdown()
 
-
-    @task(task_id='t5_company_csv_builder')
-    def csv_builder(save_folder, firm_dict, columns):
-        from common.common_func import import_file
+        
+    @task(task_id='t4_dtm_constructor')
+    @time_log
+    def dtm_constructor(data_folder, save_folder, csv_file_path, columns, start_date, end_date, **kwargs):
         import os
-        import pandas as pd
-        
-        for symbol, cik in firm_dict.items():
-            df = pd.DataFrame(columns = columns)
-            cik_path = os.path.join(save_folder, cik)
-            if os.path.exists(cik_path):
-                for filename in os.listdir(cik_path):
-                    date = filename.split('.')[0]  
-                    file_dir = os.path.join(cik_path, filename)
-                    # save_to_csv_path = file_dir.rsplit('.', 1)[0] + '.csv'
-                    if os.path.isfile(file_dir):
-                        # Initialize a dictionary with row data
-                        row_data = {
-                            'Name': symbol,
-                            'CIK': cik,
-                            'Date': date,
-                            'Body': import_file(file_dir)  
-                        }
-                        # Append the row to the DataFrame
-                        df = pd.concat([df, pd.DataFrame([row_data])], ignore_index=True)
-                folder = 'company_df'        
-                folder_path = os.path.join(save_folder, folder)
-                if not os.path.exists(folder_path):
-                    os.makedirs(folder_path)
+        from plugins.packages.PDCM.constructDTM import ConstructDTM
+        from pyspark.sql import SparkSession
+        import subprocess
+        # Optional: Check if Java is visible
+        subprocess.run(["java", "-version"], check=True)
+                
+                
+        os.environ['PYSPARK_SUBMIT_ARGS'] = "--master local[2] pyspark-shell"
 
-                # Save df to csv file
-                df = df.groupby('Name', group_keys=False).apply(lambda group: group.sort_values(by='Date'))
-                df = df.reset_index(drop=True)
-
-                df.to_csv(folder_path + "/" + f"{cik}.csv", index=False)
-                    
-
-    @task(task_id='t6_dataset_construction')
-    def sec10k_dataset_construction():
-        from packages.sec10k_dataset_construction import DicConstructor
+        # Initialize Spark session
+        spark = (
+            SparkSession.builder
+            .appName("DataPipeline")
+            .master("local[2]")
+            # Memory allocations
+            .config("spark.driver.memory", "2g")
+            .config("spark.executor.memory", "2g")
+            .config("spark.sql.shuffle.partitions", "4") 
+            # .config("spark.local.dir", "/opt/spark-logs/tmp")
+            # .config("spark.eventLog.enabled", "true")
+            # .config("spark.eventLog.dir", "/opt/spark-logs/events")
+            # .config("spark.history.fs.logDirectory", "/opt/spark-logs/events")
+            .getOrCreate()
+        )
+        pipeline = ConstructDTM(spark, data_folder, save_folder, csv_file_path, columns, start_date, end_date)
+        pipeline.file_aggregator()
+        pipeline.process_filings_for_cik_spark(save_folder, start_date, end_date, csv_file_path)
+        constituents_metadata_path = os.path.join(base_path, "data/constituents/sp500_constituents.csv") # This is for getting the CIKs for the SP500, but only for the year 2006 - 2023
+        pipeline.concatenate_parquet_files(final_save_path, csv_file_path, constituents_metadata_path, start_date, end_date)
         
-        sec10k_constructor = DicConstructor(csv_file_path, sec10k_10k_extracted_folder, firms_ciks, firms_dict)
-        sec10k_constructor.process_filings_for_cik()
-        sec10k_constructor.concatenate_dataframes(level = level, section = 'all', save_path = final_save_path)
-        
+    @task(task_id='t5_sent_predictor')
+    @time_log
+    def sent_predictor(window, **kwargs):
+        from plugins.packages.SSPM.sent_predictor_firm import SentimentPredictor
+        config = {
+            "constituents_path": os.path.join(os.getenv("AIRFLOW_HOME", "/opt/airflow"), "data/constituents/firms/nvidia_constituents_final.csv"),
+            "fig_loc": os.path.join(os.getenv("AIRFLOW_HOME", "/opt/airflow"), "data/SP500/sec/outcome/figures"),
+            "input_path": os.path.join(os.getenv("AIRFLOW_HOME", "/opt/airflow"), "data/SP500/sec/processed/dtm_0001045810.parquet"),
+            "window": window,
+            }
+        predictor = SentimentPredictor(config)
+        predictor.run()
     
+
+    
+    #FTRM
     t2_download_executor = download_executor(csv_file_path, type = type, start_date=start_date, end_date=end_date)
-    t3_extraction_executor = sec10k_extraction_executor(data_raw_folder, sec10k_10k_extracted_folder)
+    t3_txt_convertor = txt_convertor(data_raw_folder, extracted_folder)
+    #PDCM
+    t4_dtm_constructor = dtm_constructor(extracted_folder, final_save_path, csv_file_path, columns, start_date, end_date)
 
-    t5_company_csv_builder = csv_builder(sec10k_10k_extracted_folder, firms_dict, columns)
-
-    t6_dataset_construction = sec10k_dataset_construction()A
-
-
-    
-    t2_download_executor >> t3_extraction_executor >> t5_company_csv_builder >> t6_dataset_construction
+    #SSPM
+    t5_sent_predictor = sent_predictor(window=end_date)
 
     
-    
+    t2_download_executor >> t3_txt_convertor >> t4_dtm_constructor >> t5_sent_predictor
+
+        

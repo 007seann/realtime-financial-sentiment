@@ -1,0 +1,15 @@
+
+usage: airflow config [-h] COMMAND ...
+
+View configuration
+
+positional arguments:
+  COMMAND
+    get-value
+              Print the value of the configuration
+    list      List options for the configuration
+
+optional arguments:
+  -h, --help  show this help message and exit
+
+

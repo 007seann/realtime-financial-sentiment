@@ -135,7 +135,7 @@ def train_model(DD, dep, kappa, alpha_high, alpha_low = None, pprint = False, vo
 @time_log
 def predict_sent(model, arts, llambda):
     """
-    Predicts a sentiment score for a 10-K filling given a trained model
+    Predicts a sentiment score for a doc given a trained model
 
     Parameters
     ----------
@@ -161,6 +161,7 @@ def predict_sent(model, arts, llambda):
         sen = 1/DD_i.sum() * DD_i @ np.log((p*O_hat[:,0] + (1-p)*O_hat[:,1]))
         pen = llambda * np.log(p*(1-p))
         return -(sen+pen)
+
     
     p_hat = np.zeros(N)
     for i in range(N):

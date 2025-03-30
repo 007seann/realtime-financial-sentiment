@@ -1,40 +1,18 @@
 
-
 import hashlib
 import datetime
 import pandas as pd
-import multiprocessing
 import logging
 
 from plugins.packages.PDCM.metadata import FileMetadata
 
 import sys
 import os
-import json
 # Add the parent directory of hons_project to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+# print("Resolved path being added to sys.path:", os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # Late imports of your FileMetadata model if needed
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import SQLAlchemyError
 
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
-
-def _cleanup_multiprocessing_resources():
-    """
-    Cleanup function to release any leftover multiprocessing resources
-    like semaphores, locks, or Pools at program exit.
-    """
-
-
-    # Last resort: forcibly terminate active child processes
-    for proc in multiprocessing.active_children():
-        try:
-            proc.terminate()
-        except Exception as ex:
-            pass
 
 
 def compute_file_hash(file_path, chunk_size=65536):
@@ -79,13 +57,19 @@ def run_process_for_cik(cik, save_folder, folder_path, start_date, end_date, db_
     2) Checks PostgreSQL for file metadata for this CIK.
     3) Processes new/changed files, writes Parquet, updates metadata.
     """
-    from hons_project.annual_report_reader import reader
-    from hons_project.vol_reader_fun import vol_reader
+    from packages.FTRM.annual_report_reader import reader
+    from vol_reader_fun import vol_reader
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.exc import SQLAlchemyError
+
+
     engine = create_engine(db_url, echo=False)
     SessionLocal = sessionmaker(bind=engine)
 
-    # Load local firms data    
-    firms_df = pd.read_csv(firms_csv_file_path)
+    # # Load local firms data   
+
+    firms_df = pd.read_csv(firms_csv_file_path, encoding='latin1')
     firms_df['CIK'] = firms_df['CIK'].apply(lambda x: str(x).zfill(10))
     firms_dict = firms_df.set_index('Symbol')['CIK'].to_dict()
     firms_dict = {cik: symbol for symbol, cik in firms_dict.items()}
@@ -113,7 +97,6 @@ def run_process_for_cik(cik, save_folder, folder_path, start_date, end_date, db_
 
         metadata_records = []
         new_or_changed_files = []
-
         for file_path in all_files:
             file_hash = compute_file_hash(file_path)
             last_modified = get_file_modified_time(file_path)
@@ -131,11 +114,9 @@ def run_process_for_cik(cik, save_folder, folder_path, start_date, end_date, db_
                 "last_modified": last_modified
             })
 
-
         processed_dataframes = [
-            reader(os.path.basename(file_path), file_loc=cik_folder)
-            for file_path in new_or_changed_files
-            if reader(os.path.basename(file_path), file_loc=cik_folder) is not None
+            result for file_path in new_or_changed_files
+            if (result := reader(os.path.basename(file_path), file_loc=cik_folder)) is not None
         ]
 
         if not processed_dataframes:
