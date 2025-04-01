@@ -441,8 +441,8 @@ class ConstructDTM:
             output_file = result["output_file"]
             if output_file:
                 updated_files_paths.append(output_file)
-
         return updated_files_paths
+    
     @staticmethod
     def convert_timestamps_to_ms(table):
         schema = table.schema
@@ -517,7 +517,7 @@ class ConstructDTM:
             # If we have any data for this batch, Write an intermediate Parquet file while preprocessing
             # Generate 3-day rolling returns and volatilities for the batch of CIKs
             if tables_in_this_batch:
-                batch_table = pa.concat_tables(tables_in_this_batch)
+                batch_table = pa.concat_tables(tables_in_this_batch, promote_options='default')
                 batch_df = batch_table.to_pandas()
                 columns_to_drop = ['form', 'table', 'content', 'heading']
                 batch_df = batch_df.drop(columns=columns_to_drop, errors='ignore')
@@ -624,9 +624,10 @@ class ConstructDTM:
         self.spark.conf.set("spark.sql.caseSensitive", "true")
         df = self.spark.read.parquet(*filtered_paths)
         df = df.fillna(0.0)
-        dtm_save_path = os.path.join(save_path, 'dtm')
-        os.makedirs(dtm_save_path, exist_ok=True)
-        df.coalesce(1).write.parquet(dtm_save_path, mode='overwrite')
+        dtm_path = os.path.join(save_path, 'dtm')
+        new_dtm_path = os.path.join(dtm_path, 'new')
+        os.makedirs(new_dtm_path, exist_ok=True)
+        df.coalesce(1).write.parquet(new_dtm_path, mode='overwrite')
         print(f"Combined Parquet file saved to {save_path}")
         
     def filter_sp500(self, save_folder, file_path, total_constituents_path, constituents_metadata_path):
@@ -714,3 +715,59 @@ class ConstructDTM:
         print(f"Filtered data saved to {save_folder}")
         return save_folder
         
+
+    def update_dtm(self, spark, save_path):
+        import shutil
+        try:
+            spark.conf.set("spark.sql.caseSensitive", "true")
+            dtm_path = os.path.join(save_path, 'dtm')
+            new_dtm_path = os.path.join(dtm_path, 'new')
+            final_dtm_path = os.path.join(dtm_path, 'final')
+            os.makedirs(new_dtm_path, exist_ok=True)
+            os.makedirs(final_dtm_path, exist_ok=True)
+
+            # Load the existing DTM files
+            existing_dtm = os.listdir(final_dtm_path)
+            existing_dtm = [f for f in existing_dtm if f.endswith('.parquet')]
+            if not existing_dtm:
+                print("No existing DTM files found.")
+                return
+            existing_dtm_path = [os.path.join(final_dtm_path, f) for f in existing_dtm]
+            print(f"Loading existing DTM file: {existing_dtm_path[-1]}")
+            # existing_dtm_df = spark.read.parquet(existing_dtm_path[-1])
+
+            # Load the new DTM files
+            new_dtm = os.listdir(new_dtm_path)
+            new_dtm = [f for f in new_dtm if f.endswith('.parquet')]
+            if not new_dtm:
+                print("No new DTM files found.")
+                return
+            new_dtm_path = [os.path.join(new_dtm_path, f) for f in new_dtm]
+            print(f"Loading new DTM file: {new_dtm_path[-1]}")
+            # new_dtm_df = spark.read.parquet(new_dtm_path[-1])
+            
+            paths_to_merge = [existing_dtm_path[-1], new_dtm_path[-1]]
+            df = spark.read.parquet(*paths_to_merge)
+            df = df.fillna(0.0)
+            
+            # Write to a temporary directory
+            temp_dir = os.path.join(final_dtm_path, "temp_output")
+            os.makedirs(temp_dir, exist_ok=True)
+            df.coalesce(1).write.parquet(temp_dir, mode='overwrite')
+
+            # Rename the output file
+            output_file = os.path.join(final_dtm_path, "SEC_DTM_SP500_2.parquet")
+            for file in os.listdir(temp_dir):
+                if file.endswith(".parquet"):
+                    shutil.move(os.path.join(temp_dir, file), output_file)
+
+            # Clean up the temporary directory
+            shutil.rmtree(temp_dir)
+            
+            print(f"Updated DTM saved to {output_file}")
+            
+
+        except Exception as e:
+            print(f"Error in update_dtm: {e}")
+
+

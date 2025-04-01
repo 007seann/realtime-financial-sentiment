@@ -44,9 +44,10 @@ services:
             AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
             AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
             AIRFLOW__CORE__FERNET_KEY: 'ffHBWrWkkmkrpqEu_9fz8-sF0SdI-OAvUQ1OeQNoomE='
-            AIRFLOW__CORE__PARALLELISM: 4
-            AIRFLOW__CORE__DAG_CONCURRENCY: 4
-            AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: 120
+            AIRFLOW__CORE__PARALLELISM: 16     # Total running tasks
+            AIRFLOW__CORE__DAG_CONCURRENCY: 8  # Number of tasks per DAG run
+            AIRFLOW__SCHEDULER__SCHEDULER_MAX_THREADS: 4
+            AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: 600
             dags_folder: /opt/airflow/dags
             WEB_SERVER_PORT: 3000
             NLTK_DATA: /opt/airflow/nltk_data
@@ -63,18 +64,27 @@ services:
             - ./airflow_docker/airflow_env.sh:/opt/airflow/airflow_env.sh:ro
             - ./airflow_docker/entrypoint.sh:/opt/airflow/entrypoint.sh:ro
             - ./spark-logs:/opt/spark-logs:rw
-
+            - ./api:/opt/airflow/api:rw
         ports:
             - "8080:8080"   # Airflow Webserver
             - "3000:3000"   # Custom Webserver Port
             - "4040:4040"   # Spark UI
-
         command: webserver
         healthcheck:
           test: ["CMD", "curl", "--fail", "http://localhost:3000/health"]
           interval: 10s
           timeout: 10s
           retries: 5
+        deploy:
+          resources:
+            limits:
+              cpus: '3.0'       # allow up to 3 CPUs
+              memory: 12G       # allow up to 12 GB RAM
+            reservations:
+              cpus: '2.0'       # reserve 2 CPUs minimum
+              memory: 6G        # reserve 6 GB minimum
+
+
     pdcmmetastore:
         image: postgres:14
         container_name: pdcmmetastore_container

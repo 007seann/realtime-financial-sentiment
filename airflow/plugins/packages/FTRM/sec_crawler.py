@@ -193,34 +193,50 @@ def get_documents(text):
     return documents
 
 
-def download_fillings(ciks_tickers, root_folder, doc_type, headers, start_date, end_date):
+def download_filing(cik, ticker, root_folder, doc_type, headers, start_date, end_date):
+    cik = str(cik).zfill(10)
     
-    for idx, (cik, ticker) in enumerate(ciks_tickers.items()):
+    folder_path = os.path.join(root_folder, cik)
+    # Ensure the folder exists
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+    
+    # Check for already downloaded files
+    existing_files = set(os.listdir(folder_path))  # List of already downloaded files
+    existing_dates = {file_name.split('.')[0] for file_name in existing_files if file_name.endswith('.html')}
+    
+    # Generate the list of dates in the requested range
+    date_range = pd.date_range(start=start_date, end=end_date).strftime('%Y-%m-%d').tolist()
 
-        cik = str(cik).zfill(10)
-        
-        report_info = get_sec_data(cik, ticker, doc_type, headers, start_date, end_date)
+    # Determine which dates are missing
+    missing_dates = [date for date in date_range if date not in existing_dates]
 
+    # If all files for the date range already exist, skip the API call
+    if not missing_dates:
+        print(f"All files for CIK {cik} already exist. Skipping API call.")
+        return
+    
+    # Call get_sec_data to get the list of reports
+    report_info = get_sec_data(cik, ticker, doc_type, headers, start_date, end_date)
+    if not report_info:
+        return
 
-        # check if 10-K exists, otherwise skip it
-        if not report_info:
+    for index_url, _ , file_date in tqdm(report_info, desc='Downloading {} Fillings'.format(cik), unit='filling'):
+        file_date_str = file_date.strftime('%Y-%m-%d')
+        file_name = os.path.join(folder_path, f"{file_date_str}.html")
+
+        # Skip if the file already exists
+        if file_date_str in existing_dates:
+            print(f"File already exists: {file_name}. Skipping download.")
             continue
-        else:
-            folder_path = os.path.join(root_folder, cik)
-            if not os.path.exists(folder_path):
-                os.makedirs(folder_path)
-
-        for index_url, _ , file_date in tqdm(report_info, desc='Downloading {} Fillings'.format(cik), unit='filling'):
-            file_date = file_date.strftime('%Y-%m-%d')
 
 
-            file = LimitRequest.get(url=index_url, headers=headers)
+        file = LimitRequest.get(url=index_url, headers=headers)
 
 
-            file_name = os.path.join(folder_path, file_date + '.html')
-            with open(file_name,'w+') as f:
-                f.write(file.text)
-            f.close()
+        with open(file_name,'w+') as f:
+            f.write(file.text)
+        f.close()
 
 def test(path):
     df = pd.read_csv(path, encoding = 'utf-8')
