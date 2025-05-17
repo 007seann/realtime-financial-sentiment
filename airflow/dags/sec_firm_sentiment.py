@@ -51,7 +51,7 @@ with DAG(
     @task(task_id='t2_download_executor')
     @time_log
     def download_executor(firm_list_path, type, start_date, end_date, **kwargs):
-        from plugins.packages.FTRM.sec_crawler import download_fillings
+        from plugins.packages.FTRM.sec_crawler import download_filing
         import os
         import pandas as pd
         
@@ -69,11 +69,20 @@ with DAG(
         # root_folder = '10k-html'
         for t in type:
             doc_type = t
-            headers = {'User-Agent': 'University of Edinburgh s2101367@ed.ac.uk'}
+            headers = {'User-Agent': 'University of Edinburgh s2101367@ed.ac.uk'} # User Emails
 
             if not os.path.exists(data_raw_folder):
                 os.makedirs(data_raw_folder)
-            download_fillings(cik_ticker, data_raw_folder, doc_type,headers, start_date, end_date)
+            # The `download_fillings` function is a custom function imported from the
+            # `plugins.packages.FTRM.sec_crawler` module. This function is used to download filings
+            # for a list of companies based on their CIK (Central Index Key) and ticker symbols. The
+            # function takes parameters such as the dictionary mapping CIK to ticker symbols, the data
+            # folder path where the filings will be saved, the type of document to download (e.g.,
+            # '10-K' or '10-Q'), headers for the HTTP request, start date, and end date for the
+            # filings to be downloaded.
+            cik = list(cik_ticker.keys())[0]
+            ticker = list(cik_ticker.values())[0]
+            download_filing(cik, ticker, data_raw_folder, doc_type,headers, start_date, end_date)
         
     
     @task(task_id='t3_txt_convertor')
@@ -125,7 +134,7 @@ with DAG(
         pipeline = ConstructDTM(spark, data_folder, save_folder, csv_file_path, columns, start_date, end_date)
         pipeline.file_aggregator()
         pipeline.process_filings_for_cik_spark(save_folder, start_date, end_date, csv_file_path)
-        constituents_metadata_path = os.path.join(base_path, "data/constituents/sp500_constituents.csv") # This is for getting the CIKs for the SP500, but only for the year 2006 - 2023
+        constituents_metadata_path = os.path.join(base_path, "data/constituents/market/sp500_constituents.csv") # This is for getting the CIKs for the SP500, but only for the year 2006 - 2023
         pipeline.concatenate_parquet_files(final_save_path, csv_file_path, constituents_metadata_path, start_date, end_date)
         
     @task(task_id='t5_sent_predictor')

@@ -14,7 +14,6 @@ from pyspark.sql.functions import col, udf, array, monotonically_increasing_id, 
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from pyspark.sql.types import DoubleType, ArrayType, StructType, StructField, LongType
-from memory_profiler import profile
 
 
 
@@ -339,7 +338,6 @@ def kalman_spark(mod_sent_df):
 
 
 ############################ CPU Intensive Functions(Pandas) ############################
-@profile
 @time_log
 def train_model(DD, dep, kappa, alpha_high, alpha_low = None, pprint = False, vol_q=None):
     """

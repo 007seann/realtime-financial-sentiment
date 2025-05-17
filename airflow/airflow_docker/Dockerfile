@@ -1,5 +1,3 @@
-
-
 # Use the official Airflow 2.8.1 image with Python 3.8 as the base
 FROM apache/airflow:2.8.1-python3.8
 
@@ -60,7 +58,7 @@ COPY deps /deps/
 
 RUN pip install --user psycopg2-binary
 RUN pip install --user --no-index --find-links=/deps httpx==0.25.2
-RUN pip install --user --no-index --find-links=/deps psycopg2-binary pyspark==3.2.1 \
+RUN pip install --user --no-index --find-links=/deps psycopg2-binary \
 && if [ -f requirements.txt ]; then pip install --user --no-index --find-links=/deps -r requirements.txt; fi \
 && rm -rf /home/airflow/.local/lib/python3.8/site-packages/airflow/example_dags \
 && rm -rf /home/airflow/.cache/pip

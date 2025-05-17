@@ -27,8 +27,8 @@ html/
 # OS-generated
 *.swp
 
-*csv
-*parquet
+*.csv
+*.parquet
 *html
 *txt
 *png

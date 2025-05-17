@@ -166,7 +166,6 @@ with DAG(
             "input_path": "data/SP500/sec/market/dtm/final/SEC_DTM_SP500_2.parquet",
             "window": end_date,
         },
-        wait_for_completion=True,
     )
 
 

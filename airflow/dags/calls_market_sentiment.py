@@ -117,12 +117,12 @@ with DAG(
         pipeline = ConstructDTM(spark, data_folder, save_folder, csv_file_path, columns, start_date, end_date)
         pipeline.file_aggregator()
         pipeline.process_filings_for_cik_spark(save_folder, start_date, end_date, csv_file_path)
-        constituents_metadata_path = os.path.join(base_path, "data/constituents/sp500_constituents.csv") # This is for getting the CIKs for the SP500, but only for the year 2006 - 2023
+        constituents_metadata_path = os.path.join(base_path, "data/constituents/market/sp500_constituents.csv") # This is for getting the CIKs for the SP500, but only for the year 2006 - 2023
         pipeline.concatenate_parquet_files(final_save_path, csv_file_path, constituents_metadata_path, start_date, end_date)
                 
     
-    #FTRM -> Since we haven't subscribed to the API, we can't run this part
-    # t2_download_executor = download_executor(save_folder=final_save_path, api_key=api_key, start_date=start_date, end_date=end_date)
+    #FTRM -> You should use correct API key to run this part. The current API is expired
+    t2_download_executor = download_executor(save_folder=final_save_path, api_key=api_key, start_date=start_date, end_date=end_date)
     #PDCM
     t3_dtm_constructor = dtm_constructor(data_folder=extracted_folder, save_folder=final_save_path, csv_file_path=csv_file_path, columns=columns, start_date=start_date, end_date=end_date)
 
@@ -142,11 +142,10 @@ with DAG(
             "input_path": "data/SP500/calls/market/dtm/final/transcripts_DTM_SP500_2.parquet",
             "window": end_date,
         },
-        wait_for_completion=True,
         )
 
 
     
-    # t2_download_executor >> t3_dtm_constructor >> t4_sent_predictor
-    t3_dtm_constructor >> t4_run_sent_predictor_local
+    t2_download_executor >> t3_dtm_constructor >> t4_run_sent_predictor_local
+
         

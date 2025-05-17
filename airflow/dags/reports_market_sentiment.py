@@ -57,23 +57,21 @@ with DAG(
     
 
     ###############################################################################
-    @task(task_id='t1_test')
-    def test(PATH):
-    
-        df = pd.read_csv(PATH, encoding = 'utf-8')
-        cik = df['CIK'].drop_duplicates().tolist() 
-        
-        return cik
-    
-    @task(task_id='t2_download_executor')
+    @task(task_id='t1_download_id_executor')
     @time_log
-    def download_executor(save_folder, api_key, start_date, end_date, **kwargs):
+    def download_id_executor(save_folder, api_key, api_host, start_date, end_date, **kwargs):
         import asyncio
         start_date = datetime.strptime(start_date, '%Y-%m-%d').year
         end_date = datetime.strptime(end_date, '%Y-%m-%d').year
+        pages = [i for i in range(1, 3)] # Assume the total number of annual reports per firm is less than 80
+        
+        year2unixTime = {}
+        for year in range(end_date + 1, start_date - 1, -1): # eg) 2026, 2025, 2024
+            current_year_timestamp = int(datetime(year, 1, 1).timestamp())
+            year2unixTime[year] = current_year_timestamp
         
         async def async_download_executor():
-            from plugins.packages.FTRM.extract_scripts_ninja import fetch_reports
+            from plugins.packages.FTRM.extract_report_ids import fetch_ids_for_ticker
             import aiohttp
 
             rate_limiter = asyncio.Semaphore(RATE_LIMIT)
@@ -85,7 +83,33 @@ with DAG(
                 for i in range(0, len(tickers), BATCH_SIZE):
                     batch = tickers[i:i + BATCH_SIZE]
                     print(f"Processing batch {i // BATCH_SIZE + 1}: {batch}")
-                    tasks = [fetch_reports(ticker, session, rate_limiter, save_folder, api_key, INITIAL_BACKOFF, MAX_RETRIES, year_until=end_date, year_since=start_date) for ticker in batch]
+                    tasks = [fetch_ids_for_ticker(ticker, session, rate_limiter, save_folder, end_date, start_date, year2unixTime, api_key, api_host, pages, INITIAL_BACKOFF, MAX_RETRIES) for ticker in batch]
+                    await asyncio.gather(*tasks)
+
+        # Run the async function
+        asyncio.run(async_download_executor())
+    
+    @task(task_id='t2_download_executor')
+    @time_log
+    def download_executor(save_folder, api_key, api_host, start_date, end_date, **kwargs):
+        import asyncio
+        start_date = datetime.strptime(start_date, '%Y-%m-%d').year
+        end_date = datetime.strptime(end_date, '%Y-%m-%d').year
+        
+        async def async_download_executor():
+            from plugins.packages.FTRM.extract_reports import fetch_reports
+            import aiohttp
+
+            rate_limiter = asyncio.Semaphore(RATE_LIMIT)
+            connector = aiohttp.TCPConnector(limit_per_host=CONCURRENCY_LIMIT)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                tickers = list(cik_to_ticker.values())
+
+                # Process in batches
+                for i in range(0, len(tickers), BATCH_SIZE):
+                    batch = tickers[i:i + BATCH_SIZE]
+                    print(f"Processing batch {i // BATCH_SIZE + 1}: {batch}")
+                    tasks = [fetch_reports(ticker, session, rate_limiter, save_folder, api_key, api_host, INITIAL_BACKOFF, MAX_RETRIES, end_date, start_date) for ticker in batch]
                     await asyncio.gather(*tasks)
 
         # Run the async function
@@ -120,12 +144,13 @@ with DAG(
         pipeline = ConstructDTM(spark, data_folder, save_folder, csv_file_path, columns, start_date, end_date)
         pipeline.file_aggregator()
         pipeline.process_filings_for_cik_spark(save_folder, start_date, end_date, csv_file_path)
-        constituents_metadata_path = os.path.join(base_path, "data/constituents/sp500_constituents.csv") # This is for getting the CIKs for the SP500, but only for the year 2006 - 2023
+        constituents_metadata_path = os.path.join(base_path, "data/constituents/market/sp500_constituents.csv") # This is for getting the CIKs for the SP500, but only for the year 2006 - 2023
         pipeline.concatenate_parquet_files(final_save_path, csv_file_path, constituents_metadata_path, start_date, end_date)
                 
     
-    #FTRM -> Since we haven't subscribed to the API, we can't run this part
-    # t2_download_executor = download_executor(save_folder=final_save_path, api_key=api_key, start_date=start_date, end_date=end_date)
+    #FTRM -> You should use correct API key to run this part.  The current API is expired
+    t1_download_id_executor = download_id_executor(save_folder=final_save_path, api_key=api_key, api_host=api_host, start_date=start_date, end_date=end_date)
+    t2_download_executor = download_executor(save_folder=final_save_path, api_key=api_key, api_host=api_host, start_date=start_date, end_date=end_date)
     #PDCM
     t3_dtm_constructor = dtm_constructor(data_folder=extracted_folder, save_folder=final_save_path, csv_file_path=csv_file_path, columns=columns, start_date=start_date, end_date=end_date)
 
@@ -145,11 +170,9 @@ with DAG(
             "input_path": "data/SP500/reports/market/dtm/final/analysis_report_summary.parquet",
             "window": end_date,
         },
-        wait_for_completion=True,
         )
 
 
     
-    # t2_download_executor >> t3_dtm_constructor >> t4_sent_predictor
-    t3_dtm_constructor >> t4_run_sent_predictor_local
+    t1_download_id_executor >> t2_download_executor >> t3_dtm_constructor >> t4_run_sent_predictor_local
         
